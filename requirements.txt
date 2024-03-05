@@ -1,7 +1,7 @@
 pandas
 numpy
 torch
-tkinter
+#tkinter
 Pillow
 openai
 tqdm

@@ -32,7 +32,8 @@ parser.add_argument("--steer", type=str, default = "", help="Steering direction 
 parser.add_argument("--corpus_data", type=str, default = "MS-COCO", help="Corpus data to scrape")
 parser.add_argument("--num_output", type=int, default = 150, help="Number of entries we want")
 parser.add_argument("--api_key", type=str, default = "", help="API Key for openAI account")
-parser.add_argument("--do_steer", action=argparse.BooleanOptionalAction, default=False, help="do_steer")
+parser.add_argument("--do_steer", action='store_true', default=False, help="Whether to steer the scraping")
+parser.add_argument("--fp16", action='store_true', default=False, help="Whether to use fp16")
 
 
 args = parser.parse_args()
@@ -221,22 +222,23 @@ def scrape(clip_model, tokenizer, bert_model, premises, similarity_threshold = 0
 
     num_premises = len(premises)
     batch_size = 1024
-    
+
     # Compute the embeddings for each batch of premises
-    bert_text_embeds_prompts = []
+    bert_text_embeds_prompts_list = []
     for i in tqdm(range(0, len(premises), batch_size)):
         premises_batch = premises[i:i+batch_size]
         with torch.no_grad():
             text_embeds_prompts_batch = bert_model.encode(premises_batch)
-    
+
         text_embeds_prompts_batch = torch.from_numpy(text_embeds_prompts_batch)
+        text_embeds_prompts_batch = text_embeds_prompts_batch.cuda()
         text_embeds_prompts_batch = F.normalize(text_embeds_prompts_batch, dim=1)
 
-        bert_text_embeds_prompts.append(text_embeds_prompts_batch)
+        bert_text_embeds_prompts_list.append(text_embeds_prompts_batch)
 
     # Concatenate the embeddings for all batches
-    bert_text_embeds_prompts = torch.cat(bert_text_embeds_prompts, dim=0)
-
+    bert_text_embeds_prompts = torch.cat(bert_text_embeds_prompts_list, dim=0)
+    del bert_text_embeds_prompts_list
 
     # split the premises into batches
     premises_batches = [premises[i:i+batch_size] for i in range(0, num_premises, batch_size)]
@@ -245,7 +247,7 @@ def scrape(clip_model, tokenizer, bert_model, premises, similarity_threshold = 0
     text_embeds_prompts = torch.zeros(num_premises, 768)
     for i, premises_batch in enumerate(tqdm(premises_batches)):
         tok = tokenizer(premises_batch, return_tensors="pt", padding=True, truncation=True)
-        
+   
         for key in tok.keys():
             tok[key] = tok[key].cuda()
         with torch.no_grad():
@@ -260,9 +262,9 @@ def scrape(clip_model, tokenizer, bert_model, premises, similarity_threshold = 0
     # Initialize an empty list to store similar pairs
     similar_pairs = []
 
-    # Move the text embeddings to the GPU
-    text_embeds_prompts = text_embeds_prompts.cuda()
-    bert_text_embeds_prompts = bert_text_embeds_prompts.cuda()
+    # # Move the text embeddings to the GPU
+    # text_embeds_prompts = text_embeds_prompts.cuda()
+    # bert_text_embeds_prompts = bert_text_embeds_prompts.cuda()
 
     # Iterate over batches of embeddings
     for i in tqdm(range(0, len(premises), batch_size)):
@@ -277,7 +279,7 @@ def scrape(clip_model, tokenizer, bert_model, premises, similarity_threshold = 0
         mask = (similarity_matrix > similarity_threshold) & (abs(similarity_matrix - bert_similarity_matrix) > 0.2)
 
         # Find the indices of the matching pairs
-        j_indices, k_indices = mask.nonzero(as_tuple=True)
+        j_indices, k_indices = mask.nonzerao(as_tuple=True)
 
         # Collect the matching pairs and their similarity scores
 
@@ -291,7 +293,7 @@ def scrape(clip_model, tokenizer, bert_model, premises, similarity_threshold = 0
     file_path = f'similar_from_{args.corpus_data}_top{args.num_output}_do_steer{args.do_steer}_steer{args.steer}.csv'
     with open(file_path, mode='w', newline='') as csvfile:
         csv_writer = csv.writer(csvfile)
-        csv_writer.writerow(['Sample 1', 'Sample 2'])
+        csv_writer.writerow(['Sample 1', 'Sample 2', 'CLIP Similarity', 'BERT Similarity', 'Difference'])
 
         negative_keywords = ["there is no", "unable", "does not", "do not", "am not", "no image", "no picture"]
 
@@ -343,6 +345,12 @@ if __name__ == '__main__':
         unique_premise = load_snli()
     else: 
         unique_premise = load_coco()
+    
+    if args.fp16:
+        model = model.half()
+        bert_model = bert_model.half()
+
+
 
 
     scrape(model, tokenizer, bert_model, unique_premise)
