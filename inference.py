@@ -20,7 +20,7 @@ def main():
     prompts = pd.read_csv(args.prompts_path)
     os.makedirs(os.path.join(args.output_dir, args.model_name), exist_ok=True)
     print(prompts.head())
-    for i in tqdm(range(61, len(prompts))):
+    for i in tqdm(range(1, len(prompts))):
         prompt = prompts.iloc[i]
         prompt_1 = prompt['Sample 1']
         prompt_2 = prompt['Sample 2']
