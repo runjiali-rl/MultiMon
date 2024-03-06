@@ -25,13 +25,14 @@ from sentence_transformers import SentenceTransformer
 import argparse
 import urllib.request
 import zipfile
+import pickle
 
 parser = argparse.ArgumentParser(description="Scraping from corpus data with steering (optional)")
     
 parser.add_argument("--steer", type=str, default = "", help="Steering direction for the self-driving car")
 parser.add_argument("--corpus_data", type=str, default = "MS-COCO", help="Corpus data to scrape")
 parser.add_argument("--num_output", type=int, default = 150, help="Number of entries we want")
-parser.add_argument("--api_key", type=str, default = "", help="API Key for openAI account")
+parser.add_argument("--api_key", type=str, default = None, help="API Key for openAI account")
 parser.add_argument("--do_steer", action='store_true', default=False, help="Whether to steer the scraping")
 parser.add_argument("--fp16", action='store_true', default=False, help="Whether to use fp16")
 
@@ -40,21 +41,27 @@ args = parser.parse_args()
 unique_rows = set() # create a set to store unique rows
 
 # Erik, your api_key
-openai.api_key = args.api_key
-
+if args.do_steer:
+    assert args.api_key is not None, "You need to provide an API key to steer the scraping"
+# openai.api_key = args.api_key
+client = openai.OpenAI(api_key=args.api_key)
 # Define a function to query the OpenAI API and evaluate the answer
 def get_yes_no_answer(question):
-    response = openai.Completion.create(
-        engine="text-davinci-003",
-        #engine="gpt-3.5-turbo",
-        prompt=f'Please respond with either "yes" or "no" to the following: {question}',
-        max_tokens=3,
-        n=1,
-        stop=None,
-        temperature=0.2,
+    prompt = f'Please respond with either "yes" or "no" to the following: {question}'
+    message = [
+        {'role': 'user', 'content': prompt},
+    ]
+    # response = client.chat.completions.create(
+    #     model="text-davinci-003",
+    #     messages=message
+    # )
+
+    response = client.chat.completions.create(
+        messages = message,
+        model = "gpt-3.5-turbo"
     )
 
-    answer = response.choices[0].text.strip()
+    answer = response.choices[0].message.content.strip()
     yes_no_regex = re.compile(r"^(yes|no)$", re.IGNORECASE)
 
     if yes_no_regex.match(answer):
@@ -219,100 +226,100 @@ def write_unique_rows(row, writer):
      
 
 def scrape(clip_model, tokenizer, bert_model, premises, similarity_threshold = 0.9):
+    save_path = f'similar_from_{args.corpus_data}_do_steer_{args.do_steer}.pkl'
+    if os.path.exists(save_path):
+        similar_pairs = pickle.load(open(save_path, 'rb'))
+    else:
+        num_premises = len(premises)
+        batch_size = 1024
 
-    num_premises = len(premises)
-    batch_size = 1024
+        # Compute the embeddings for each batch of premises
+        bert_text_embeds_prompts_list = []
+        for i in tqdm(range(0, len(premises), batch_size)):
+            premises_batch = premises[i:i+batch_size]
+            with torch.no_grad():
+                text_embeds_prompts_batch = bert_model.encode(premises_batch)
 
-    # Compute the embeddings for each batch of premises
-    bert_text_embeds_prompts_list = []
-    for i in tqdm(range(0, len(premises), batch_size)):
-        premises_batch = premises[i:i+batch_size]
-        with torch.no_grad():
-            text_embeds_prompts_batch = bert_model.encode(premises_batch)
+            text_embeds_prompts_batch = torch.from_numpy(text_embeds_prompts_batch)
+            text_embeds_prompts_batch = text_embeds_prompts_batch.cuda()
+            text_embeds_prompts_batch = F.normalize(text_embeds_prompts_batch, dim=1)
 
-        text_embeds_prompts_batch = torch.from_numpy(text_embeds_prompts_batch)
-        text_embeds_prompts_batch = text_embeds_prompts_batch.cuda()
-        text_embeds_prompts_batch = F.normalize(text_embeds_prompts_batch, dim=1)
+            bert_text_embeds_prompts_list.append(text_embeds_prompts_batch)
 
-        bert_text_embeds_prompts_list.append(text_embeds_prompts_batch)
+        # Concatenate the embeddings for all batches
+        bert_text_embeds_prompts = torch.cat(bert_text_embeds_prompts_list, dim=0)
+        del bert_text_embeds_prompts_list
 
-    # Concatenate the embeddings for all batches
-    bert_text_embeds_prompts = torch.cat(bert_text_embeds_prompts_list, dim=0)
-    del bert_text_embeds_prompts_list
+        # split the premises into batches
+        premises_batches = [premises[i:i+batch_size] for i in range(0, num_premises, batch_size)]
 
-    # split the premises into batches
-    premises_batches = [premises[i:i+batch_size] for i in range(0, num_premises, batch_size)]
+        # compute the embeddings for each batch of premises
+        text_embeds_prompts = torch.zeros(num_premises, 768).to(bert_text_embeds_prompts.dtype).to(bert_text_embeds_prompts.device)
+        for i, premises_batch in enumerate(tqdm(premises_batches)):
+            tok = tokenizer(premises_batch, return_tensors="pt", padding=True, truncation=True)
+    
+            for key in tok.keys():
+                tok[key] = tok[key].cuda()
+            with torch.no_grad():
+                text_outputs = clip_model.text_model(**tok)
+            text_embeds = text_outputs[1]
+            text_embeds = clip_model.text_projection(text_embeds)
+            text_embeds_prompt = F.normalize(text_embeds, dim=1)
+            start_idx = i * batch_size
+            end_idx = min(start_idx + batch_size, num_premises)
+            text_embeds_prompts[start_idx:end_idx, :] = text_embeds_prompt 
 
-    # compute the embeddings for each batch of premises
-    text_embeds_prompts = torch.zeros(num_premises, 768)
-    for i, premises_batch in enumerate(tqdm(premises_batches)):
-        tok = tokenizer(premises_batch, return_tensors="pt", padding=True, truncation=True)
-   
-        for key in tok.keys():
-            tok[key] = tok[key].cuda()
-        with torch.no_grad():
-            text_outputs = clip_model.text_model(**tok)
-        text_embeds = text_outputs[1]
-        text_embeds = clip_model.text_projection(text_embeds)
-        text_embeds_prompt = F.normalize(text_embeds, dim=1)
-        start_idx = i * batch_size
-        end_idx = min(start_idx + batch_size, num_premises)
-        text_embeds_prompts[start_idx:end_idx, :] = text_embeds_prompt 
+        # Initialize an empty list to store similar pairs
+        similar_pairs = []
 
-    # Initialize an empty list to store similar pairs
-    similar_pairs = []
+        # # # Move the text embeddings to the GPU
+        # text_embeds_prompts = text_embeds_prompts.cuda()
+        # bert_text_embeds_prompts = bert_text_embeds_prompts.cuda()
 
-    # # Move the text embeddings to the GPU
-    # text_embeds_prompts = text_embeds_prompts.cuda()
-    # bert_text_embeds_prompts = bert_text_embeds_prompts.cuda()
-
-    # Iterate over batches of embeddings
-    for i in tqdm(range(0, len(premises), batch_size)):
-        batch_premises = premises[i:i+batch_size]
-        batch_text_embeds_prompts = text_embeds_prompts[i:i+batch_size]
-        bert_batch_text_embeds_prompts = bert_text_embeds_prompts[i:i+batch_size]
+        # Iterate over batches of embeddings
+        for i in tqdm(range(0, len(premises), batch_size)):
+            batch_premises = premises[i:i+batch_size]
+            batch_text_embeds_prompts = text_embeds_prompts[i:i+batch_size]
+            bert_batch_text_embeds_prompts = bert_text_embeds_prompts[i:i+batch_size]
+            
+            # Compute the dot product between each pair of embeddings in the batch
+            similarity_matrix = torch.matmul(batch_text_embeds_prompts, text_embeds_prompts.t())
+            bert_similarity_matrix = torch.matmul(bert_batch_text_embeds_prompts, bert_text_embeds_prompts.t())
         
-        # Compute the dot product between each pair of embeddings in the batch
-        similarity_matrix = torch.matmul(batch_text_embeds_prompts, text_embeds_prompts.t())
-        bert_similarity_matrix = torch.matmul(bert_batch_text_embeds_prompts, bert_text_embeds_prompts.t())
-       
-        mask = (similarity_matrix > similarity_threshold) & (abs(similarity_matrix - bert_similarity_matrix) > 0.2)
+            mask = (similarity_matrix > similarity_threshold) & (abs(similarity_matrix - bert_similarity_matrix) > 0.2)
 
-        # Find the indices of the matching pairs
-        j_indices, k_indices = mask.nonzerao(as_tuple=True)
+            # Find the indices of the matching pairs
+            j_indices, k_indices = torch.nonzero(mask.float(), as_tuple=True)
 
-        # Collect the matching pairs and their similarity scores
+            # Collect the matching pairs and their similarity scores
 
-        for j, k in zip(j_indices.tolist(), k_indices.tolist()):
-            similarity_score = similarity_matrix[j, k].item()
-            bert_similarity_score = bert_similarity_matrix[j, k].item()
-            similar_pairs.append((batch_premises[j], premises[k], similarity_score, bert_similarity_score, similarity_score-bert_similarity_score))
-        
-   
+            for j, k in zip(j_indices.tolist(), k_indices.tolist()):
+                similarity_score = similarity_matrix[j, k].item()
+                bert_similarity_score = bert_similarity_matrix[j, k].item()
+                similar_pairs.append((batch_premises[j], premises[k], similarity_score, bert_similarity_score, similarity_score-bert_similarity_score))
+            
+        pickle.dump(similar_pairs, open(save_path, 'wb'))
     # Write similar pairs to a CSV file
-    file_path = f'similar_from_{args.corpus_data}_top{args.num_output}_do_steer{args.do_steer}_steer{args.steer}.csv'
-    with open(file_path, mode='w', newline='') as csvfile:
+    file_path = f'similar_from_{args.corpus_data}_top{args.num_output}_do_steer_{args.do_steer}.csv'
+    with open(file_path, mode='w', newline='', encoding='utf-8') as csvfile:
         csv_writer = csv.writer(csvfile)
         csv_writer.writerow(['Sample 1', 'Sample 2', 'CLIP Similarity', 'BERT Similarity', 'Difference'])
-
         negative_keywords = ["there is no", "unable", "does not", "do not", "am not", "no image", "no picture"]
-
         similar_pairs.sort(key=lambda x: x[2], reverse=True)
 
         num_written = 1
 
         for pair in tqdm(similar_pairs):
-
             # Check if none of the negative keywords are present in the row
             if not any(keyword in field for field in pair[:2] for keyword in negative_keywords):
-
                 # Ask your yes-no question
                 prompt1, prompt2 = pair[0], pair[1]
-                
                 if args.do_steer:
-
-                    question = f'Is the difference between "{prompt1}" and "{prompt2}" important for {args.steer}?'
-
+                    question = f'Does the variation between "{prompt1}" and "{prompt2}" \
+                        signify any change in directional movement or action, suggesting \
+                            contrasting types of motion or trajectory, like entering \
+                                versus exiting, or ascending versus descending?'
+                    answer = get_yes_no_answer(question)
                     if answer == "yes":
                         # Write the unique row to the output file
                         is_unique = write_unique_rows(pair, csv_writer)
@@ -335,15 +342,12 @@ def scrape(clip_model, tokenizer, bert_model, premises, similarity_threshold = 0
 
 
 if __name__ == '__main__':
-    
-    
-
     model, tokenizer, processor = load_clip_model()
     bert_model = load_bert_model()
 
     if args.corpus_data == "SNLI":
         unique_premise = load_snli()
-    else: 
+    else:
         unique_premise = load_coco()
     
     if args.fp16:
@@ -354,5 +358,3 @@ if __name__ == '__main__':
 
 
     scrape(model, tokenizer, bert_model, unique_premise)
-  
-
