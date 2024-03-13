@@ -51,10 +51,6 @@ def get_yes_no_answer(question):
     message = [
         {'role': 'user', 'content': prompt},
     ]
-    # response = client.chat.completions.create(
-    #     model="text-davinci-003",
-    #     messages=message
-    # )
 
     response = client.chat.completions.create(
         messages = message,
@@ -96,8 +92,7 @@ def load_snli():
 
 
     data_dir = '.'
-    annotations_url = url = "https://nlp.stanford.edu/projects/snli/snli_1.0.zip"  # URL to download the SNLI dataset
-
+    annotations_url = "https://nlp.stanford.edu/projects/snli/snli_1.0.zip"  # URL to download the SNLI dataset
 
     download_and_extract_dataset_SNLI(annotations_url, data_dir)
 
@@ -105,12 +100,12 @@ def load_snli():
     snli_train_file = "snli_1.0/snli_1.0_train.jsonl"
     snli_dev_file = "snli_1.0/snli_1.0_dev.jsonl"
     snli_test_file = "snli_1.0/snli_1.0_test.jsonl"
-    
+
     # Read the dataset files using pandas
     train_data = pd.read_json(snli_train_file, lines=True)
     dev_data = pd.read_json(snli_dev_file, lines=True)
     test_data = pd.read_json(snli_test_file, lines=True)
-    
+
     # Remove rows with '-' label (no label assigned)
     train_data = train_data[train_data['gold_label'] != '-']
     dev_data = dev_data[dev_data['gold_label'] != '-']
@@ -119,13 +114,13 @@ def load_snli():
     train_premises = train_data['sentence1'].tolist()
     dev_premises = dev_data['sentence1'].tolist()
     test_premises = test_data['sentence1'].tolist()
-    
+
     # Combine the premises from all splits
     all_premises = train_premises + dev_premises + test_premises
-    
+
     # Remove duplicates if needed
     unique_premises = list(set(all_premises))
-    
+
     return unique_premises
 
 
@@ -149,7 +144,6 @@ def load_captions(annotations_path):
 
 
 def download_and_extract_dataset_COCO(url, data_dir):
-    
     os.makedirs(data_dir, exist_ok=True)  # Ensure the directory exists
     file_path = os.path.join(data_dir, 'annotations.zip')
 
@@ -164,6 +158,21 @@ def download_and_extract_dataset_COCO(url, data_dir):
         with zipfile.ZipFile(file_path, 'r') as zip_ref:
             zip_ref.extractall(data_dir)
         os.remove(file_path)
+
+
+def load_panda(file_path):
+    data = pd.read_csv(file_path)
+    all_captions = []
+    for caption_list in data['caption'].tolist():
+        caption_list = caption_list.split(',')
+        caption_list = [caption.replace("'", "") for caption in caption_list]
+        caption_list = [caption.replace("[", "") for caption in caption_list]
+        caption_list = [caption.replace("]", "") for caption in caption_list]
+        caption_list = [caption.replace('"', "") for caption in caption_list]
+        caption_list = [caption.strip() for caption in caption_list]
+        all_captions.extend(caption_list)
+    return all_captions
+
 
 def load_coco():
     # Set the paths to the dataset and annotations files
@@ -225,17 +234,22 @@ def write_unique_rows(row, writer):
     return False
      
 
-def scrape(clip_model, tokenizer, bert_model, premises, similarity_threshold = 0.9):
+def scrape(clip_model, tokenizer, bert_model, premises, similarity_threshold = 0.9, max_embedding_length = 4e6):
     save_path = f'similar_from_{args.corpus_data}_do_steer_{args.do_steer}.pkl'
+    num_premises = int(min(max_embedding_length, len(premises)))
+
     if os.path.exists(save_path):
         similar_pairs = pickle.load(open(save_path, 'rb'))
+        del bert_model
+        del clip_model
+        del tokenizer
     else:
-        num_premises = len(premises)
-        batch_size = 1024
+        batch_size = 512
 
         # Compute the embeddings for each batch of premises
         bert_text_embeds_prompts_list = []
-        for i in tqdm(range(0, len(premises), batch_size)):
+        for i in tqdm(range(0, num_premises, batch_size)):
+
             premises_batch = premises[i:i+batch_size]
             with torch.no_grad():
                 text_embeds_prompts_batch = bert_model.encode(premises_batch)
@@ -247,17 +261,21 @@ def scrape(clip_model, tokenizer, bert_model, premises, similarity_threshold = 0
             bert_text_embeds_prompts_list.append(text_embeds_prompts_batch)
 
         # Concatenate the embeddings for all batches
+  
         bert_text_embeds_prompts = torch.cat(bert_text_embeds_prompts_list, dim=0)
+        bert_text_embeds_prompts = bert_text_embeds_prompts[:num_premises, :]
         del bert_text_embeds_prompts_list
 
         # split the premises into batches
         premises_batches = [premises[i:i+batch_size] for i in range(0, num_premises, batch_size)]
 
         # compute the embeddings for each batch of premises
-        text_embeds_prompts = torch.zeros(num_premises, 768).to(bert_text_embeds_prompts.dtype).to(bert_text_embeds_prompts.device)
+        text_embeds_prompts = torch.zeros(num_premises, 768)\
+            .to(bert_text_embeds_prompts.dtype).to(bert_text_embeds_prompts.device)
         for i, premises_batch in enumerate(tqdm(premises_batches)):
+            start_idx = i * batch_size
             tok = tokenizer(premises_batch, return_tensors="pt", padding=True, truncation=True)
-    
+
             for key in tok.keys():
                 tok[key] = tok[key].cuda()
             with torch.no_grad():
@@ -265,28 +283,32 @@ def scrape(clip_model, tokenizer, bert_model, premises, similarity_threshold = 0
             text_embeds = text_outputs[1]
             text_embeds = clip_model.text_projection(text_embeds)
             text_embeds_prompt = F.normalize(text_embeds, dim=1)
-            start_idx = i * batch_size
             end_idx = min(start_idx + batch_size, num_premises)
-            text_embeds_prompts[start_idx:end_idx, :] = text_embeds_prompt 
+            text_embeds_prompts[start_idx:end_idx, :] = text_embeds_prompt[:end_idx-start_idx, :]
 
         # Initialize an empty list to store similar pairs
         similar_pairs = []
+        assert len(text_embeds_prompts) == len(bert_text_embeds_prompts),\
+            "The number of premises and embeddings do not match"
 
-        # # # Move the text embeddings to the GPU
-        # text_embeds_prompts = text_embeds_prompts.cuda()
-        # bert_text_embeds_prompts = bert_text_embeds_prompts.cuda()
+        #  Move the text embeddings to the GPU
+        # text_embeds_prompts = text_embeds_prompts.to(torch.float8)
+        # bert_text_embeds_prompts = bert_text_embeds_prompts.to(torch.float8)
 
         # Iterate over batches of embeddings
         for i in tqdm(range(0, len(premises), batch_size)):
             batch_premises = premises[i:i+batch_size]
             batch_text_embeds_prompts = text_embeds_prompts[i:i+batch_size]
             bert_batch_text_embeds_prompts = bert_text_embeds_prompts[i:i+batch_size]
-            
+
             # Compute the dot product between each pair of embeddings in the batch
-            similarity_matrix = torch.matmul(batch_text_embeds_prompts, text_embeds_prompts.t())
-            bert_similarity_matrix = torch.matmul(bert_batch_text_embeds_prompts, bert_text_embeds_prompts.t())
-        
-            mask = (similarity_matrix > similarity_threshold) & (abs(similarity_matrix - bert_similarity_matrix) > 0.2)
+            similarity_matrix = torch.matmul(batch_text_embeds_prompts,
+                                             text_embeds_prompts.t())
+            bert_similarity_matrix = torch.matmul(bert_batch_text_embeds_prompts,
+                                                  bert_text_embeds_prompts.t())
+
+            mask = (similarity_matrix > similarity_threshold) &\
+                  (abs(similarity_matrix - bert_similarity_matrix) > 0.2)
 
             # Find the indices of the matching pairs
             j_indices, k_indices = torch.nonzero(mask.float(), as_tuple=True)
@@ -296,9 +318,18 @@ def scrape(clip_model, tokenizer, bert_model, premises, similarity_threshold = 0
             for j, k in zip(j_indices.tolist(), k_indices.tolist()):
                 similarity_score = similarity_matrix[j, k].item()
                 bert_similarity_score = bert_similarity_matrix[j, k].item()
-                similar_pairs.append((batch_premises[j], premises[k], similarity_score, bert_similarity_score, similarity_score-bert_similarity_score))
-            
+                similar_pairs.append((batch_premises[j],
+                                      premises[k],
+                                      similarity_score,
+                                      bert_similarity_score,
+                                      similarity_score-bert_similarity_score))
+
         pickle.dump(similar_pairs, open(save_path, 'wb'))
+        del text_embeds_prompts
+        del bert_text_embeds_prompts
+        del bert_model
+        del clip_model
+        del tokenizer
     # Write similar pairs to a CSV file
     file_path = f'similar_from_{args.corpus_data}_top{args.num_output}_do_steer_{args.do_steer}.csv'
     with open(file_path, mode='w', newline='', encoding='utf-8') as csvfile:
@@ -315,10 +346,25 @@ def scrape(clip_model, tokenizer, bert_model, premises, similarity_threshold = 0
                 # Ask your yes-no question
                 prompt1, prompt2 = pair[0], pair[1]
                 if args.do_steer:
-                    question = f'Does the variation between "{prompt1}" and "{prompt2}" \
-                        signify any change in directional movement or action, suggesting \
-                            contrasting types of motion or trajectory, like entering \
-                                versus exiting, or ascending versus descending?'
+                    question = f"""
+                    Does the difference between two described scenarios, referred to\
+                          as '{prompt1}' and '{prompt2}', suggest a contrasting type of\
+                          movement or direction? Are these differences indicative of opposite actions, \
+                          such as one scenario showing an entrance while the other shows an exit, or one depicting an ascent while \
+                          the other a descent? Consider the following examples to elaborate on this inquiry:
+
+                    Entering vs. Exiting:
+                    Prompt1: "A person walking towards a building," suggests an action of entering.
+                    Prompt2: "A person walking away from a building," indicates the opposite action, exiting.
+
+                    Ascending vs. Descending:
+                    Prompt1: "A bird flying upwards towards the sky," illustrates ascending motion.
+                    Prompt2: "A bird diving down towards the ground," represents descending motion.
+
+                    Through these examples, can we determine if the variations between \
+                        '{prompt1}' and '{prompt2}' in each case distinctly signify a change \
+                        in the direction or type of motion, highlighting contrasting actions \
+                        like entering versus exiting, or ascending versus descending? Please respond with either 'yes' or 'no.'"""
                     answer = get_yes_no_answer(question)
                     if answer == "yes":
                         # Write the unique row to the output file
@@ -347,8 +393,14 @@ if __name__ == '__main__':
 
     if args.corpus_data == "SNLI":
         unique_premise = load_snli()
-    else:
+    elif args.corpus_data == "MS-COCO":
         unique_premise = load_coco()
+    elif args.corpus_data == "Panda10M":
+        unique_premise = load_panda('/homes/55/runjia/scratch/panda70m/panda70m_training_10m.csv')
+    elif args.corpus_data == "Panda70M":
+        unique_premise = load_panda('/homes/55/runjia/scratch/panda70m/panda70m_training_full.csv')
+    else:
+        raise ValueError("Invalid corpus data")
     
     if args.fp16:
         model = model.half()
@@ -357,4 +409,4 @@ if __name__ == '__main__':
 
 
 
-    scrape(model, tokenizer, bert_model, unique_premise)
+    scrape(model, tokenizer, bert_model, unique_premise, max_embedding_length=1.5e6)
