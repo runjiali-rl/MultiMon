@@ -1,3 +1,4 @@
-from .anime_lcm import animate_lcm_generate
-from .modelscope import modelscope_generate
-from .zeroscope import zeroscope_generate
+from .anime_lcm import AnimateLCMPipeline
+from .modelscope import ModelscopePipeline
+from .zeroscope import ZeroscopePipeline
+from .text2video_zero import Text2VideoZeroPipeline
