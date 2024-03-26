@@ -12,7 +12,11 @@ def parse_args():
                         type=str,
                         default='anime_lcm',
                         help='model name for text2video',
-                        choices=['animate_lcm', 'modelscope', 'zeroscope', 'text2video_zero'])
+                        choices=['animate_lcm',
+                                 'modelscope',
+                                 'zeroscope',
+                                 'text2video_zero',
+                                 'animate_diff'])
     parser.add_argument('--prompts_path',
                         type=str,
                         default='similar_from_SNLI_top150_do_steer_True.csv',
@@ -34,6 +38,8 @@ def main():
         model = ZeroscopePipeline()
     elif args.model_name == 'text2video_zero':
         model = Text2VideoZeroPipeline()
+    elif args.model_name == 'animate_diff':
+        model = AnimatediffPipeline()
     else:
         raise ValueError('Invalid model name')
 

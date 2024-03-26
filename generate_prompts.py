@@ -1,6 +1,6 @@
 import argparse
 import openai
-from transformers import CLIPModel, CLIPTokenizer, CLIPProcessor
+from transformers import CLIPModel, CLIPTokenizer, CLIPProcessor, T5Tokenizer, T5ForConditionalGeneration
 from sentence_transformers import SentenceTransformer
 import torch
 from torch.nn import functional as F
@@ -8,12 +8,15 @@ import pandas as pd
 import time
 
 
+
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Generate')
     parser.add_argument('--api_key', type=str, default='sk-1234567890', help='OpenAI API key')
     parser.add_argument('--output_dir', type=str, default='.', help='output directory')
     parser.add_argument('--num_output', type=int, default=100, help='number of outputs')
-    parser.add_argument('--motion_type', type=str, default='linear', help='Type of motion')
+    parser.add_argument('--failure_type', type=str, default='linear', help='Type of motion')
     parser.add_argument('--clip_similarity_thresh',
                         type=float,
                         default=0.9,
@@ -22,17 +25,23 @@ def parse_args():
                         type=float,
                         default=0.2,
                         help='Difference between CLIP and BERT similarity threshold')
+    parser.add_argument('--cache_dir', type=str,
+                        default='/homes/55/runjia/scratch/multimon_cache',
+                        help='cache directory')
     args = parser.parse_args()
     return args
 
-def load_clip_model():
+def load_clip_model(cache_dir='.'):
     # Load the pre-trained CLIP model
-    model = CLIPModel.from_pretrained('openai/clip-vit-large-patch14')
+    model = CLIPModel.from_pretrained('openai/clip-vit-large-patch14',
+                                      cache_dir=cache_dir)
     model = model.cuda()
 
     # Load the corresponding tokenizer
-    tokenizer = CLIPTokenizer.from_pretrained('openai/clip-vit-large-patch14')
-    processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+    tokenizer = CLIPTokenizer.from_pretrained('openai/clip-vit-large-patch14',
+                                              cache_dir=cache_dir)
+    processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14",
+                                              cache_dir=cache_dir)
 
     return model, tokenizer, processor
 
@@ -42,6 +51,26 @@ def load_bert_model():
 
     return bert_model
 
+
+def load_t5_model(cache_dir='.'):
+    # Load the pre-trained T5 model
+    model = T5ForConditionalGeneration.from_pretrained('google/flan-t5-large',
+                                                      cache_dir=cache_dir)
+    model = model.cuda()
+
+    # Load the corresponding tokenizer
+    tokenizer = T5Tokenizer.from_pretrained('google/flan-t5-large',
+                                            cache_dir=cache_dir)
+
+    return model, tokenizer
+# tokenizer = T5Tokenizer.from_pretrained("google/flan-t5-large")
+# model = T5ForConditionalGeneration.from_pretrained("google/flan-t5-large", device_map="auto")
+
+# input_text = "translate English to German: How old are you?"
+# input_ids = tokenizer(input_text, return_tensors="pt").input_ids.to("cuda")
+
+# outputs = model.generate(input_ids)
+# print(tokenizer.decode(outputs[0]))
 
 def gpt_generate(prompt: str,
                  client: openai.OpenAI,):
@@ -126,13 +155,13 @@ def filter_pairs(pairs: list,
                 filtered_pairs["clip_similarity"].append(clip_similaritiy.item())
                 filtered_pairs["bert_similarity"].append(bert_similarity.item())
                 filtered_pairs["difference"].append(clip_similaritiy.item() -\
-                                                     bert_similarity.item())
+                                                    bert_similarity.item())
     return filtered_pairs
 
 
 def generate(args: argparse.Namespace):
     client = openai.OpenAI(api_key=args.api_key)
-    if args.motion_type == 'linear':
+    if args.failure_type == 'linear':
         prompt = """Write down 41 additional pairs of prompts that\
                 an embedding model with the following failure mode \
                 might encode similarly, even though they would \
@@ -141,7 +170,7 @@ def generate(args: argparse.Namespace):
                 ("prompt1", "prompt2"),
                 You will be evaluated on how well you actually perform. \
                 Your sentence structure and length can be creative; \
-                extrapolate based on the failure mode you’ve summarized. Be both creative and cautious. \
+                extrapolate based on the failure mode you've summarized. Be both creative and cautious. \
                 Please make the prompts complete sentences.
                 
 
@@ -162,7 +191,7 @@ def generate(args: argparse.Namespace):
                 ("prompt1", "prompt2"),
                 """
 
-    elif args.motion_type == 'rotary':
+    elif args.failure_type == 'rotary':
         prompt = """Write down 41 additional pairs of prompts that\
                     an embedding model with the following failure mode \
                     might encode similarly, even though they would \
@@ -171,7 +200,7 @@ def generate(args: argparse.Namespace):
                     ("prompt1", "prompt2"),
                     You will be evaluated on how well you actually perform. \
                     Your sentence structure and length can be creative; \
-                    extrapolate based on the failure mode you’ve summarized. Be both creative and cautious. \
+                    extrapolate based on the failure mode you've summarized. Be both creative and cautious. \
                     Please make the prompts complete sentences.
                     
                     Failure Mode: 
@@ -196,7 +225,7 @@ def generate(args: argparse.Namespace):
                     ("prompt1", "prompt2"),
                     """
 
-    elif args.motion_type == 'perspective':
+    elif args.failure_type == 'perspective':
         prompt = """Write down 41 additional pairs of prompts that\
                     an embedding model with the following failure mode \
                     might encode similarly, even though they would \
@@ -205,7 +234,7 @@ def generate(args: argparse.Namespace):
                     ("prompt1", "prompt2"),
                     You will be evaluated on how well you actually perform. \
                     Your sentence structure and length can be creative; \
-                    extrapolate based on the failure mode you’ve summarized. Be both creative and cautious. \
+                    extrapolate based on the failure mode you've summarized. Be both creative and cautious. \
                     Please make the prompts complete sentences.
                     
                     Failure Mode: 
@@ -233,8 +262,8 @@ def generate(args: argparse.Namespace):
                     ("prompt1", "prompt2"),
                     ("prompt1", "prompt2"),
                     """
-        
-    elif args.motion_type == 'speed':
+     
+    elif args.failure_type == 'speed':
         prompt = """Write down 41 additional pairs of prompts that\
                     an embedding model with the following failure mode \
                     might encode similarly, even though they would \
@@ -243,7 +272,7 @@ def generate(args: argparse.Namespace):
                     ("prompt1", "prompt2"),
                     You will be evaluated on how well you actually perform. \
                     Your sentence structure and length can be creative; \
-                    extrapolate based on the failure mode you’ve summarized. Be both creative and cautious. \
+                    extrapolate based on the failure mode you've summarized. Be both creative and cautious. \
                     Please make the prompts complete sentences.
 
                     Failure Mode:
@@ -273,20 +302,59 @@ def generate(args: argparse.Namespace):
                     ("prompt1", "prompt2"),
                     ("prompt1", "prompt2"),
                     """
+    elif args.failure_type == 'occlusion':
+        prompt = """Write down 41 additional pairs of prompts that\
+                    an embedding model with the following failure mode \
+                    might encode similarly, even though they would \
+                    correspond to different images if used as captions. Use the following format:
+                    ("prompt1", "prompt2"),
+                    ("prompt1", "prompt2"),
+                    You will be evaluated on how well you actually perform. \
+                    Your sentence structure and length can be creative; \
+                    extrapolate based on the failure mode you've summarized. Be both creative and cautious. \
+                    Please make the prompts complete sentences.
 
-    # prompt = """
-    #         Failure Mode:
-    #         Movement Contradiction: A contradiction exists between two scenarios \
-    #         when their described actions or movements are diametrically opposed \
-    #         in direction or intention but the subjects, and environments are exactly the same.\
-    #         This opposition is manifest in pairs of \
-    #         actions that are antithetical to each other, \
-    #         such as entering versus exiting or ascending versus descending.
+                    Failure Mode:
+                    Occlusion Contradiction: the contradiction occurs when two scenarios \
+                    describe the same subjects (subject A and subject B) and environments but with occlusion relationship\
+                    that significantly differ, either subject A is occluded by subject B or subject B is occluded by subject A, \
+                    yet are presented as occurring simultaneously. This type of contradiction \
+                    is identified through comparisons of actions where one exhibits a significant \
+                    occlusion relationship and the other a decrease, despite identical conditions.
 
-    #         Example:
-    #         ("A person walking towards a building", "A person walking away from a building"),
-    #         ("A bird flying upwards towards the sky", "A bird diving down towards the ground"),
-    #     """
+                    Example:
+                    ("A person walking behind a tree", "A person walking in front of a tree"),
+                    ("A car driving behind a building", "A car driving in front of a building"),
+                    ("A cat hiding behind a box", "A cat sitting in front of a box"),
+                    ("A bird flying behind a cloud", "A bird flying in front of a cloud"),
+                    ("A dog barking behind a fence", "A dog barking in front of a fence"),
+                    ("A child playing behind a wall", "A child playing in front of a wall"),
+                    ("A plane flying behind a mountain", "A plane flying in front of a mountain"),
+                    ("A boat sailing behind an island", "A boat sailing in front of an island"),
+                    ("A cyclist riding behind a car", "A cyclist riding in front of a car"),
+                    ("A runner jogging behind a tree", "A runner jogging in front of a tree"),
+                    ("A skateboarder skating behind a bench", "A skateboarder skating in front of a bench"),
+                    ("A fish swimming behind a rock", "A fish swimming in front of a rock"),
+                    ("A bird perching behind a branch", "A bird perching in front of a branch"),
+                    ("A person standing behind a door", "A person standing in front of a door"),
+                    ("A car parked behind a building", "A car parked in front of a building"),
+                    ("A cat sleeping behind a chair", "A cat sleeping in front of a chair"),
+                    ("A dog running behind a fence", "A dog running in front of a fence"),
+                    ("A child playing behind a wall", "A child playing in front of a wall"),
+                    ("A plane flying behind a mountain", "A plane flying in front of a mountain"),
+                    ("A boat sailing behind an island", "A boat sailing in front of an island"),
+                    ("A cyclist riding behind a car", "A cyclist riding in front of a car"),
+                    ("A runner jogging behind a tree", "A runner jogging in front of a tree"),
+                    ("A skateboarder skating behind a bench", "A skateboarder skating in front of a bench"),
+                    ("A fish swimming behind a rock", "A fish swimming in front of a rock"),
+                    ("A bird perching behind a branch", "A bird perching in front of a branch"),
+
+                    Format:
+                    ("prompt1", "prompt2"),
+                    ("prompt1", "prompt2"),
+                    """
+                    
+        
     final_contradicting_pairs = {
         "prompt1": [],
         "prompt2": [],
@@ -295,7 +363,7 @@ def generate(args: argparse.Namespace):
         "difference": []
     }
 
-    clip_model, clip_tokenizer, _ = load_clip_model()
+    clip_model, clip_tokenizer, _ = load_clip_model(args.cache_dir)
     bert_model = load_bert_model()
     run_count = 0
     while len(final_contradicting_pairs['prompt1']) < args.num_output:
@@ -308,11 +376,14 @@ def generate(args: argparse.Namespace):
                                     bert_model,
                                     args.clip_similarity_thresh,
                                     args.similarity_difference_thresh)
-        final_contradicting_pairs["prompt1"].extend(filtered_pairs["prompt1"])
-        final_contradicting_pairs["prompt2"].extend(filtered_pairs["prompt2"])
-        final_contradicting_pairs["clip_similarity"].extend(filtered_pairs["clip_similarity"])
-        final_contradicting_pairs["bert_similarity"].extend(filtered_pairs["bert_similarity"])
-        final_contradicting_pairs["difference"].extend(filtered_pairs["difference"])
+        for idx in range(len(filtered_pairs['prompt1'])):
+            if not filtered_pairs['prompt1'][idx] in final_contradicting_pairs["prompt1"]:
+                final_contradicting_pairs["prompt1"].append(filtered_pairs["prompt1"][idx])
+                final_contradicting_pairs["prompt2"].append(filtered_pairs["prompt2"][idx])
+                final_contradicting_pairs["clip_similarity"].append(filtered_pairs["clip_similarity"][idx])
+                final_contradicting_pairs["bert_similarity"].append(filtered_pairs["bert_similarity"][idx])
+                final_contradicting_pairs["difference"].append(filtered_pairs["difference"][idx])
+
         print(f"current length: {len(final_contradicting_pairs['prompt1'])}")
         time.sleep(5)
     return final_contradicting_pairs
@@ -321,7 +392,7 @@ def main():
     args = parse_args()
     final_contradicting_pairs = generate(args)
     df = pd.DataFrame(final_contradicting_pairs)
-    df.to_csv(f"{args.output_dir}/contradicting_{args.motion_type}_pairs.csv", index=False)
+    df.to_csv(f"{args.output_dir}/contradicting_{args.failure_type}_pairs.csv", index=False)
 
 
 if __name__ == '__main__':

@@ -7,8 +7,8 @@ from videollava.mm_utils import tokenizer_image_token, get_model_name_from_path,
 
 def main():
     disable_torch_init()
-    video = '/homes/55/runjia/scratch/gen_video_results/zeroscope/linear/1/A_person_sliding_down_the_ladder_to_the_bottom.mp4'
-    inp = 'Does this video describe a person climbing up a ladder to reach the top? Just answer yes or no: '
+    video = '/homes/55/runjia/scratch/gen_video_results/animate_lcm/linear/15/A_mountain_climber_descending_back_down.mp4'
+    inp = 'Does this video describe a person climbing up a mountain?, Please focus more on the motion direction. Please only answer with yes or no'
     model_path = 'LanguageBind/Video-LLaVA-7B'
     cache_dir = '/homes/55/runjia/scratch/diffusion_weights'
     device = 'cuda'
