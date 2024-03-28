@@ -6,7 +6,7 @@ import torch
 from torch.nn import functional as F
 import pandas as pd
 import time
-
+import numpy as np
 
 
 
@@ -262,7 +262,7 @@ def generate(args: argparse.Namespace):
                     ("prompt1", "prompt2"),
                     ("prompt1", "prompt2"),
                     """
-     
+
     elif args.failure_type == 'speed':
         prompt = """Write down 41 additional pairs of prompts that\
                     an embedding model with the following failure mode \
@@ -302,6 +302,7 @@ def generate(args: argparse.Namespace):
                     ("prompt1", "prompt2"),
                     ("prompt1", "prompt2"),
                     """
+
     elif args.failure_type == 'occlusion':
         prompt = """Write down 41 additional pairs of prompts that\
                     an embedding model with the following failure mode \
@@ -333,28 +334,15 @@ def generate(args: argparse.Namespace):
                     ("A boat sailing behind an island", "A boat sailing in front of an island"),
                     ("A cyclist riding behind a car", "A cyclist riding in front of a car"),
                     ("A runner jogging behind a tree", "A runner jogging in front of a tree"),
-                    ("A skateboarder skating behind a bench", "A skateboarder skating in front of a bench"),
-                    ("A fish swimming behind a rock", "A fish swimming in front of a rock"),
-                    ("A bird perching behind a branch", "A bird perching in front of a branch"),
-                    ("A person standing behind a door", "A person standing in front of a door"),
-                    ("A car parked behind a building", "A car parked in front of a building"),
-                    ("A cat sleeping behind a chair", "A cat sleeping in front of a chair"),
-                    ("A dog running behind a fence", "A dog running in front of a fence"),
-                    ("A child playing behind a wall", "A child playing in front of a wall"),
-                    ("A plane flying behind a mountain", "A plane flying in front of a mountain"),
-                    ("A boat sailing behind an island", "A boat sailing in front of an island"),
-                    ("A cyclist riding behind a car", "A cyclist riding in front of a car"),
-                    ("A runner jogging behind a tree", "A runner jogging in front of a tree"),
-                    ("A skateboarder skating behind a bench", "A skateboarder skating in front of a bench"),
-                    ("A fish swimming behind a rock", "A fish swimming in front of a rock"),
-                    ("A bird perching behind a branch", "A bird perching in front of a branch"),
+              
 
                     Format:
                     ("prompt1", "prompt2"),
                     ("prompt1", "prompt2"),
                     """
-                    
-        
+                
+
+
     final_contradicting_pairs = {
         "prompt1": [],
         "prompt2": [],
@@ -377,7 +365,10 @@ def generate(args: argparse.Namespace):
                                     args.clip_similarity_thresh,
                                     args.similarity_difference_thresh)
         for idx in range(len(filtered_pairs['prompt1'])):
-            if not filtered_pairs['prompt1'][idx] in final_contradicting_pairs["prompt1"]:
+            # ensure the same prompt1 is not repeated and the same subject is not repeated for more than 3 times
+            if not filtered_pairs['prompt1'][idx] in final_contradicting_pairs["prompt1"] and \
+                np.sum([filtered_pairs['prompt1'][idx].split(" ")[1] == final_contradicting_pair.split(" ")[1] for \
+                                                final_contradicting_pair in final_contradicting_pairs["prompt1"]]) <= 3:
                 final_contradicting_pairs["prompt1"].append(filtered_pairs["prompt1"][idx])
                 final_contradicting_pairs["prompt2"].append(filtered_pairs["prompt2"][idx])
                 final_contradicting_pairs["clip_similarity"].append(filtered_pairs["clip_similarity"][idx])
@@ -386,6 +377,8 @@ def generate(args: argparse.Namespace):
 
         print(f"current length: {len(final_contradicting_pairs['prompt1'])}")
         time.sleep(5)
+        if run_count > 1500:
+            break
     return final_contradicting_pairs
 
 def main():

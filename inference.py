@@ -3,7 +3,7 @@ import pandas as pd
 import os
 from diffusers.utils import export_to_gif, export_to_video
 from tqdm import tqdm
-from models import *
+from models.video_models import *
 
 
 def parse_args():
