@@ -177,14 +177,23 @@ def generate(args: argparse.Namespace):
                 Failure Mode:
                 Linear Motion Contradiction: This type of contradiction occurs when \
                 two scenarios describe movements that are directly opposite in direction \
-                along a straight line, yet the subjects and environments remain identical \
-                and no change farther or closer to the camera. \
+                along a straight line, yet the subjects and environments remain identical\
                 The core of this contradiction lies in the linear actions that counter each other,\
-                such as upward movement versus downward movement, left movement versus right movement, and eastward movement versus westward movement.
+                such as upward movement versus downward movement and leftward movement versus rightward movement
 
                 Example:
-                ("A train moving forward down the tracks", "A train moving backward on the tracks"),
-                ("A car driving east on a straight road", "A car driving west on a straight road"),
+                ("A train moving to the right on the tracks", "A train moving to the left on the tracks"),
+                ("A person walking up a flight of stairs", "A person walking down a flight of stairs"),
+                ("A car driving right on a road", "A car driving left on a road"),
+                ("A bird flying higher in the sky", "A bird flying lower in the sky"),
+                ("A person walking to the right on a sidewalk", "A person walking to the left on a sidewalk"),
+                ("A boat sailing rightward on the water", "A boat sailing leftward on the water"),
+                ("A plane ascending in the sky", "A plane descending in the sky"),
+                ("A cyclist pedaling to the right on a road", "A cyclist pedaling to the left on a road"),
+                ("A runner sprinting to the right on a track", "A runner sprinting to the left on a track"),
+                ("A car driving up a hill", "A car driving down a hill"),
+                ("A person walking to the right on a path", "A person walking to the left on a path"),
+                ("A boat sailing to the right on the water", "A boat sailing to the left on the water"),
 
                 Format:
                 ("prompt1", "prompt2"),
